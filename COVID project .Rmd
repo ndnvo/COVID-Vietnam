@@ -1,0 +1,237 @@
+---
+title: "COVID-19 in VIETNAM"
+author: "Joey Vo"
+date: "Last edited `r Sys.Date()`"
+output: html_document
+---
+## __Project overview__
+
+This project uses data collected in real-time from the [`Vietnamese Government COVID-19's portal`](https://ncov.vncdc.gov.vn/) to demonstate analyses related to the COVID-19 figures in Vietnam.
+Data has been continuously updated since 2021-04-27.
+
+![](https://www.rta.org/assets/COVID19/COVID%2019%20Banner.jpeg)
+
+
+```{r data, include = FALSE}
+#Loading the libraries
+r = getOption("repos")
+r["CRAN"] = "http://cran.us.r-project.org"
+options(repos = r)
+install.packages("weatherData")
+install.packages("tidyverse")
+library(dplyr)
+install.packages("ggplot2")
+library(ggplot2)
+install.packages("jsonlite")
+library(jsonlite)
+install.packages("lubridate")
+library(lubridate)
+library(data.table)
+```
+
+### Part 1: NATIONAL TRENDLINE & TOP CITIES WITH MOST CASES
+The first Json file collected from [this API](https://ncov.vncdc.gov.vn/v2/vietnam/by-current?start_time=2021-04-27) contains daily number of COVID-19 cases recorded in each province since 27/04/2021
+
+```{r loading-json-file}
+#Load the jsonfile into R's dataframe
+url <- "https://ncov.vncdc.gov.vn/v2/vietnam/by-current?start_time=2021-04-27"
+
+file <- fromJSON(url)
+
+glimpse(file)
+
+```
+
+As the daily record of cases by each city is nested in a dataframe within the bigger dataframe, we will need to transform the format of the dataset before performing further analysis
+
+#### Transform the data into dataframe
+```{r dataframe-generation}
+
+data_all <- data.frame()
+
+covidData <- data.frame(cityID=integer(), cityName=character(), date= character(), value = integer())
+datelist <- colnames(file$data)
+for (row in 1:nrow(file)) {
+  cityID <- file[row, 1]
+  cityName <- file[row, 2]
+  for (i in 1:length(datelist)) {
+    date <- datelist[i]
+    value <- file$data[row, i]
+    de <- list(cityID = cityID, cityName = cityName, date = date, value = value)
+    covidData = rbind(covidData, de, stringsAsFactors=FALSE)
+  }
+}
+covidData$date <- ymd(covidData$date)
+str(covidData)
+```
+#### Total daily COVID-19 cases in Vietnam
+```{r daily-case-plot}
+
+totalcase <- covidData %>%
+  group_by(date) %>%
+  summarize(sum = sum(value))
+str(totalcase)
+
+ggplot(totalcase, aes(x = date, y = sum, group = 1)) + 
+  geom_line(color="steelblue") + 
+  labs(x = "Month", y = "Number of cases", title = "Total new COVID-19 cases in Vietnam", subtitle = "Source:https://ncov.vncdc.gov.vn/")  + theme_bw() + theme(panel.background = element_blank()) +
+  scale_x_date(date_labels = "%b-%Y")
+```
+
+#### Top 10 cities with the most cases in the last 7 days
+
+
+```{r by_city}
+#Preapre the data for plotting
+
+currentdate = Sys.Date()
+
+covidData[is.na(covidData)] = 0
+
+top10 <- covidData %>%
+  filter(date >= (currentdate -7)) %>%
+  group_by(cityName) %>%
+  summarize(sum = sum(value)) %>%
+  arrange(desc(sum)) %>%
+  head(10)
+```
+
+
+```{r chart_top_10_cities}
+ggplot(top10, aes(x = reorder(cityName, -sum), y = sum, fill = sum)) + geom_col(color="steelblue") + labs(y = "Number of cases", title = "Top 10 Cities With Most Cases Last 7 Days", subtitle = "Source:https://ncov.vncdc.gov.vn/") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), axis.title.x=element_blank(), legend.position = "none") +   geom_text(aes(label=sum), position=position_dodge(width=0.9), vjust=-0.25, size = 3.2) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+```
+
+### COVID-19 CASES BY GENDER & AGE
+The second Json file from [this API](https://ncov.vncdc.gov.vn/v2/vietnam/dotuoi?start_time=2021-04-27) contains daily number of COVID-19 cases recorded, with details related to gender & age since 27/04/2021
+
+```{r load-data}
+#Load & transform the API data
+
+url1 <- "https://ncov.vncdc.gov.vn/v2/vietnam/dotuoi?start_time=2021-04-27"
+
+file1 <- fromJSON(url1)
+
+sex_age <- data.frame()
+
+sex_age <- data.frame(sex=character(), age=character(), value = integer())
+agelist <- colnames(file1$data)
+agelist
+for (row in 1:nrow(file1)) {
+  sex <- file1[row, 1]
+  for (i in 1:length(agelist)) {
+    age <- agelist[i]
+    value <- file1$data[row, i]
+    li <- list(sex = sex, age = age, value = value)
+    sex_age = rbind(sex_age, li, stringsAsFactors=FALSE)
+  }
+}
+
+str(sex_age)
+```
+
+```{r plot-sex-age}
+#Plot 
+caption <- paste(strwrap("Significantly more women >65 infected than men", 40), collapse = "\n")
+cbPalette <- c("#999999","#0099CC")
+
+ggplot(sex_age, aes(x = age, y = value, fill= sex)) + geom_col(position = position_dodge()) + 
+labs(y = "Number of cases", title = "Number of COVID-19 cases by gender and age", subtitle = "Source:https://ncov.vncdc.gov.vn/") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), axis.title.x=element_blank(), legend.position = "none") +   
+annotate("label", x = 1.6, y = 45000, label = caption, size = 3.5) + scale_fill_manual(values=cbPalette)
+```
+
+Further analysis: Proportion of COVID-19 Cases by Gender
+
+```{r data-preparation}
+sex_percent <- sex_age %>%
+  group_by(sex) %>%
+  summarize(sum = sum(value)) %>%
+  mutate(total = sum(sum),
+         percent = sum/total)
+```
+
+```{r plot}
+# Create a basic bar
+pie = ggplot(sex_percent, aes(x="", y=percent, fill=sex)) + geom_bar(stat="identity", width=1)
+ 
+# Convert to pie (polar coordinates) and add labels
+pie = pie + coord_polar("y", start=0) + geom_text(aes(label = paste0(round(percent*100), "%")), position = position_stack(vjust = 0.5))
+ 
+# Add color scale (hex colors)
+pie = pie + scale_fill_manual(values=c("#55DDE0", "#33658A", "#2F4858", "#F6AE2D", "#F26419", "#999999")) 
+ 
+# Remove labels and add title
+pie = pie + labs(x = NULL, y = NULL, fill = NULL, title = "Proportion of COVID Cases by Gender", subtitle = "Source:https://ncov.vncdc.gov.vn/") 
+ 
+# Tidy up the theme
+pie = pie + theme_classic() + theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          plot.title = element_text(hjust = 0.5, color = "#666666"),
+          plot.subtitle = element_text(hjust = 0.5, color = "#666666"))
+
+pie
+```
+
+### SOURCE OF TRANSMISSIONS & DEATH RATE BY CITIES
+
+The [third Json file](https://ncov.vncdc.gov.vn/v2/vietnam/province-type?start_time=2021-04-27) contains accumulated number of cases of COVID-19 recorded in each city, within two categories: Overseas/ Local transmission + the accummulated death figure.
+
+```{r data-loading}
+
+url <- "https://ncov.vncdc.gov.vn/v2/vietnam/province-type?start_time=2021-04-27"
+
+file <- fromJSON(url)
+
+
+glimpse(file)
+
+province_data <- file[2]$rows
+```
+
+```{r - data-prep1}
+
+#Source of infections and death figures
+
+summary <- province_data %>%
+summarize(cong_dong = sum(cong_dong), nhap_canh = sum(nhap_canh), tu_vong = sum(tu_vong))
+
+summary1 <- transpose(summary)
+summary1$type = colnames(summary)
+colnames(summary1) <- c("value","type")
+
+summary1
+```
+
+
+```{r - plot1}
+#Source of infections & death figures
+ggplot(summary1, aes(x= type, y = value, fill = value)) + geom_col(color="steelblue") + labs(y = "Number of cases", title = "Source of infections and death figures", subtitle = "Source:https://ncov.vncdc.gov.vn/")+
+theme(axis.title.x=element_blank(), legend.position = "none") +   geom_text(aes(label=value), position=position_dodge(width=0.9), vjust=-0.25, size = 3.2) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+```
+
+As can be seen from the figure, community transmission is the critical source of COVID-19 spread in Vietnam. In addition, the death rate/ total infection is relatively low
+
+```{r - data-prep2}
+#Top 10 - Death rate of COVID -19 by cities
+death_figure <- province_data %>%
+mutate(death_rate = round((tu_vong *100/so_ca),2)) %>%
+arrange(desc(death_rate)) %>%
+head(10)
+```
+
+```{r - plot2}
+ggplot(death_figure, aes(x= reorder(tinh, death_rate), y = death_rate, label = death_rate)) + 
+  geom_point(stat='identity', fill="white", size=7)  +
+  geom_segment(aes(y = 0, x = tinh, 
+                   yend = death_rate, 
+                   xend = tinh), 
+               color = "black") +
+  geom_text(color="white", size=2.5) +
+  labs(x= "", title="Top 10 - Death rate of COVID -19 by cities") + 
+  coord_flip()
+``` 
+
+Ho Chi Minh City is both the city with the highest cases during the last 7 days and the leading city regarding the death rate/ total infections.
+
+
